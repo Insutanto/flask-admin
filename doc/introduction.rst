@@ -6,7 +6,39 @@ Introduction To Flask-Admin
 Getting Started
 ===============
 
-****
+Installing Flask-Admin
+----------------------
+
+Flask-Admin provides an easy-to-use layer on top of a number of databases and file stores.
+Whether you use SQLAlchemy, peewee, AWS S3, or something else that Flask-Admin supports,
+we don't install those things out-of-the-box. This reduces the risk of compatibility issues
+and means that you don't download/install anything you don't need.
+
+Depending on what you use, you should install Flask-Admin with your required extras selected.
+
+Flask-Admin has these optional extras you can select:
+
+=========================== ================================================
+Extra name                  What functionality does this add to Flask-Admin?
+=========================== ================================================
+sqlalchemy                  SQLAlchemy, for accessing many database engines
+sqlalchemy-with-utils       As above, with some additional utilities for different data types
+geoalchemy                  As with SQLAlchemy, but adding support for geographic data and maps
+pymongo                     Supports the PyMongo library
+mongoengine                 Supports the MongoEngine library
+peewee                      Supports the peewee library
+s3                          Supports file admin using AWS S3
+azure-blob-storage          Supports file admin using Azure blob store
+images                      Allows working with image data
+export                      Supports downloading data in a variety of formats (eg TSV, JSON, etc)
+rediscli                    Allows Flask-Admin to display a CLI for Redis
+translation                 Supports translating Flask-Admin into a number of languages
+all                         Installs support for all features
+=========================== ================================================
+
+Once you've chosen the extras you need, install Flask-Admin by specifying them like so::
+
+    pip install flask-admin[sqlalchemy,s3,images,export,translation]
 
 Initialization
 --------------
@@ -18,20 +50,28 @@ The first step is to initialize an empty admin interface for your Flask app::
 
     app = Flask(__name__)
 
-    # set optional bootswatch theme
-    app.config['FLASK_ADMIN_SWATCH'] = 'cerulean'
-
-    admin = Admin(app, name='microblog', template_mode='bootstrap3')
+    admin = Admin(app, name='microblog', theme=Bootstrap4Theme(swatch='cerulean'))
     # Add administrative views here
 
     app.run()
 
-Here, both the *name* and *template_mode* parameters are optional. Alternatively,
-you could use the :meth:`~flask_admin.base.Admin.init_app` method.
+Here, both the *name* and *theme* parameters are optional, have a look to the API
+:class:`~flask_admin.base.Admin` for more details about all other parameters.
+Alternatively, you could use the :meth:`~flask_admin.base.Admin.init_app` method.
 
 If you start this application and navigate to `http://localhost:5000/admin/ <http://localhost:5000/admin/>`_,
 you should see an empty page with a navigation bar on top. Customize the look by
-specifying a Bootswatch theme that suits your needs (see http://bootswatch.com/3/ for available swatches).
+specifying one of the included Bootswatch themes (see https://bootswatch.com/4/ for a preview of the swatches).
+Here is list of all available themes:::
+
+  all_themes = [
+    "default", "cerulean", "cosmo", "cyborg",  "darkly",
+    "flatly", "journal", "litera", "lumen", "lux", "materia",
+    "minty", "pulse", "sandstone", "simplex", "sketchy", "slate",
+    "solar", "spacelab",  "superhero", "united", "yeti"
+  ]
+
+
 
 Adding Model Views
 ------------------
@@ -44,7 +84,7 @@ is the SQLAlchemy backend, which you can use as follows::
 
     # Flask and Flask-SQLAlchemy initialization here
 
-    admin = Admin(app, name='microblog', template_mode='bootstrap3')
+    admin = Admin(app, name='microblog', theme=Bootstrap4Theme())
     admin.add_view(ModelView(User, db.session))
     admin.add_view(ModelView(Post, db.session))
 
@@ -75,8 +115,6 @@ So, now you can add any content to the index page, while maintaining a consisten
 
 Authorization & Permissions
 ===========================
-
-****
 
 When setting up an admin interface for your application, one of the first problems
 you'll want to solve is how to keep unwanted users out. With Flask-Admin there
@@ -114,7 +152,7 @@ could be as simple as::
 
 In the navigation menu, components that are not accessible to a particular user will not be displayed
 for that user. For an example of using Flask-Login with Flask-Admin, have a look
-at https://github.com/flask-admin/Flask-Admin/tree/master/examples/auth-flask-login.
+at https://github.com/pallets-eco/flask-admin/tree/master/examples/auth-flask-login.
 
 The main drawback is that you still need to implement all of the relevant login,
 registration, and account management views yourself.
@@ -124,7 +162,7 @@ Using Flask-Security
 --------------------
 
 If you want a more polished solution, you could
-use `Flask-Security <https://pythonhosted.org/Flask-Security/>`_,
+use `Flask-Security <https://flask-security-too.readthedocs.io/>`_,
 which is a higher-level library. It comes with lots of built-in views for doing
 common things like user registration, login, email address confirmation, password resets, etc.
 
@@ -142,13 +180,14 @@ Defining a `security_context_processor` function will take care of this for you:
 
     def security_context_processor():
         return dict(
-            admin_base_template=admin.base_template,
+            admin_base_template=admin.theme.base_template,
             admin_view=admin.index_view,
+            theme=admin.theme,
             h=admin_helpers,
         )
 
 For a working example of using Flask-Security with Flask-Admin, have a look at
-https://github.com/flask-admin/Flask-Admin/tree/master/examples/auth.
+https://github.com/pallets-eco/flask-admin/tree/master/examples/auth.
 
 The example only uses the built-in `register` and `login` views, but you could follow the same
 approach for including the other views, like `forgot_password`, `send_confirmation`, etc.
@@ -156,9 +195,7 @@ approach for including the other views, like `forgot_password`, `send_confirmati
 .. _customizing-builtin-views:
 
 Customizing Built-in Views
-=========================
-
-****
+==========================
 
 When inheriting from `ModelView`, values can be specified for numerous
 configuration parameters. Use these to customize the views to suit your
@@ -200,30 +237,150 @@ To **disable some of the CRUD operations**, set any of these boolean parameters:
     can_edit = False
     can_delete = False
 
+**Controlling Columns:**
+************************
+
+**To include** only a subset of the model's columns in the list view, specify a list of column names for
+the *column_list* parameter::
+
+    column_list = ['name', 'email', 'country']
+
+
+By default, the Primary key column is excluded from the list view, but you can include it by adding it
+to the *column_list* or by setting::
+
+    column_display_pk = True
+
 If your model has too much data to display in the list view, you can **add a read-only
-details view** by setting::
+details view**, with option to show this view in a modal. This can be done by setting::
 
     can_view_details = True
+    column_details_list = ['ip_address', 'user_agent', 'created_at', 'updated_at']
+    details_modal = False
 
-**Removing columns** from the list view is easy, just pass a list of column names for
-the *column_exclude_list* parameter::
+**Removing columns** from the list view or from the details view is easy, just pass a list of
+column names for the *column_exclude_list* and *column_details_exclude_list* parameters::
 
     column_exclude_list = ['password', ]
+    column_details_exclude_list = ['password', ]
+
+**Renaming columns** is also easy, just specify a dictionary mapping column names to their
+new labels::
+
+    column_labels = {
+        'name': 'Full Name',
+        'email': 'Email Address',
+        'country': 'Country of Residence'
+    }
+
+And if you want more description for the columns to be presented as a tooltip, you can
+specify a dictionary mapping column names to their descriptions. This description
+will be also presented in create/edit form field::
+
+    column_descriptions = {
+        'name': 'The full name of the user',
+        'email': 'The email address of the user',
+        'country': 'The country where the user lives'
+    }
 
 To **make columns searchable**, or to use them for filtering, specify a list of column names::
 
     column_searchable_list = ['name', 'email']
     column_filters = ['country']
 
+
+To make **columns sortable**, specify a list of column names like the example below. The
+default sort can be specified using the *column_default_sort* attribute::
+
+    column_sortable_list = ['name', 'email', 'country']
+
+See more details and examples of sortable columns in the API documentation
+for :meth:`~flask_admin.model.BaseModelView.column_sortable_list`.
+
+A value can presented in different ways by specifying a **formatter function** for the column::
+
+    column_formatters = {
+        "price" : lambda v, c, m, p: m.price*2,
+        "created_at": lambda v, c, m, p: m.created_at.strftime('%Y-%m-%d'),
+        "imgage": lambda v, c, m, p: Markup('<img src="%s">' % m.image_url)
+    }
+
+See the API documentation for :meth:`~flask_admin.model.BaseModelView.column_formatters` for more
+details and examples of formatter functions. And for details view the *column_formatters_detail*
+can be used::
+
+    column_formatters_detail = {
+        "created_at": lambda v, c, m, p: m.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+For generalization, you can use *column_type_formatters* to specify formatters for all columns of
+a given type. The following example demonstrates how to do this::
+
+    from flask_admin.model import typefmt
+    from datetime import datetime
+
+    MY_DEFAULT_FORMATTERS = dict(typefmt.BASE_FORMATTERS)
+    MY_DEFAULT_FORMATTERS.update({
+        datetime: lambda v, c, m, p: m.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+    })
+
+    class MyModelView(ModelView):
+        column_type_formatters = MY_DEFAULT_FORMATTERS
+
+Likewise, you can use *column_type_formatters_detail* to specify formatters for all columns of
+a given type in the details view::
+
+    column_type_formatters_detail = MY_DEFAULT_FORMATTERS
+
+Controlling Rows:
+*****************
+
+
+**Pagination** is enabled by default, but you can disable it by setting::
+
+    page_size = 50  # the number of entries per page.
+    can_set_page_size = True
+    page_size_options = (10, 20, 50, 100)
+
+
+By default, the list view includes a set of action buttons for each row, which allow you to
+edit, delete, or view details for that record. To **disable these buttons**, set::
+
+    column_display_actions = False
+
+And to **add custom action buttons** to the list view, specify a list of dictionaries for
+the *column_extra_row_actions* parameter::
+
+    from flask_admin.model.template import EndpointLinkRowAction, LinkRowAction
+
+    class MyModelView(BaseModelView):
+        column_extra_row_actions = [
+            LinkRowAction(
+                'glyphicon glyphicon-off', 'http://direct.link/?id={row_id}'
+            ),
+            EndpointLinkRowAction(
+                'glyphicon glyphicon-test', 'my_view.index_view'
+            )
+        ]
+
+
+**Creating/Editing Rows:**
+**************************
+
 For a faster editing experience, enable **inline editing** in the list view::
 
     column_editable_list = ['name', 'last_name']
 
-Or, have the add & edit forms display inside a **modal window** on the list page, instead of
-the dedicated *create* & *edit* pages::
+Editable_list is converts each column into Ajax form so that you can edit & save the new value
+in same row. see the API docs :meth:`~flask_admin.model.BaseModelView.ajax_update` for Ajax example.
+
+Another way of inline editing without losing the current context, have the add & edit forms display
+inside a **modal window** on the list page, instead of the dedicated *create*, *edit* and *details*
+pages::
 
     create_modal = True
     edit_modal = True
+    details_modal = True
 
 You can restrict the possible values for a text-field by specifying a list of **select choices**::
 
@@ -265,6 +422,10 @@ When your forms contain foreign keys, have those **related models loaded via aja
         'user': {
             'fields': ['first_name', 'last_name', 'email'],
             'page_size': 10
+        },
+        'post': {
+            'fields': ['title', 'body'],
+            'page_size': 10
         }
     }
 
@@ -282,15 +443,32 @@ To **manage related models inline**::
 These inline forms can be customized. Have a look at the API documentation for
 :meth:`~flask_admin.contrib.sqla.ModelView.inline_models`.
 
-To **enable csv export** of the model view::
+**Exporting:**
+**************
+
+To **enable csv export** of the model view with including and excluding specific columns,
+data formatting options, and type-based formatters::
 
     can_export = True
+    column_export_list = ['name', 'email', 'country']
+    column_export_exclude_list = ['password', ]
+    column_formatters_export = {
+        'created_at': lambda v, c, m, p: m.created_at.strftime('%Y-%m-%d'),
+    }
+
+    column_type_formatters_export = {
+        datetime: lambda v, c, m, p: m.created_at.strftime('%Y-%m-%d'),
+    }
 
 This will add a button to the model view that exports records, truncating at :attr:`~flask_admin.model.BaseModelView.export_max_rows`.
+you can also specify the export types that are available for the model view::
+
+    export_types = ['csv', 'json']
 
 
-Grouping Views
-==============
+
+Grouping Views (Menu Categories)
+================================
 When adding a view, specify a value for the `category` parameter
 to group related views together in the menu::
 
@@ -305,15 +483,17 @@ To nest related views within these drop-downs, use the `add_sub_category` method
 
     admin.add_sub_category(name="Links", parent_name="Team")
 
-And to add arbitrary hyperlinks to the menu::
+To add arbitrary hyperlinks to the menu::
 
   admin.add_link(MenuLink(name='Home Page', url='/', category='Links'))
+
+And to add a menu divider to separate menu items in the menu::
+
+  admin.add_menu_item(MenuDivider(), target_category='Links')
 
 
 Adding Your Own Views
 =====================
-
-****
 
 For situations where your requirements are really specific and you struggle to meet
 them with the built-in :class:`~flask_admin.model.ModelView` class, Flask-Admin makes it easy for you to
@@ -349,12 +529,13 @@ By extending the *admin/master.html* template, you can maintain a consistent use
 even while having tight control over your page's content.
 
 Overriding the Built-in Views
-----------------------------
+-----------------------------
 There may be some scenarios where you want most of the built-in ModelView
 functionality, but you want to replace one of the default `create`, `edit`, or `list` views.
 For this you could override only the view in question, and all the links to it will still function as you would expect::
 
     from flask_admin.contrib.sqla import ModelView
+    from flask_admin import expose
 
     # Flask and Flask-SQLAlchemy initialization here
 
@@ -367,17 +548,65 @@ For this you could override only the view in question, and all the links to it w
 
         return self.render('create_user.html')
 
+
+Configure Views
+---------------
+Views can be configured by changing some Environment variables.
+
+
+=============================== ==============================================
+Variable                        Desctiption
+=============================== ==============================================
+Geographical Map views          To enable use of maps:
+
+                                ``FLASK_ADMIN_MAPS``
+
+                                Usually Works with:
+
+                                ``FLASK_ADMIN_DEFAULT_CENTER_LAT``
+
+                                ``FLASK_ADMIN_DEFAULT_CENTER_LONG``
+
+                                Can be integrated with MapBox using:
+
+                                ``FLASK_ADMIN_MAPBOX_MAP_ID``
+
+                                ``FLASK_ADMIN_MAPBOX_ACCESS_TOKEN``
+
+                                And can use with Google Search with:
+
+                                ``FLASK_ADMIN_MAPS_SEARCH``
+
+                                ``FLASK_ADMIN_GOOGLE_MAPS_API_KEY``
+
+                                see more :ref:`display-map-widgets`
+
+Exception handling               To show exceptions on the output rather than
+                                 flash messages:
+
+                                 ``FLASK_ADMIN_RAISE_ON_VIEW_EXCEPTION``
+
+                                 ``FLASK_ADMIN_RAISE_ON_INTEGRITY_ERROR``
+
+                                 ``FLASK_ADMIN_RAISE_ON_INTEGRITY_ERROR``
+
+                                 see more :ref:`raise-exceptions-instead-of-flash`
+=============================== ==============================================
+
+**Note:** The ``FLASK_ADMIN_SWATCH``, ``FLASK_ADMIN_FLUID_LAYOUT`` variables are
+deprecated and moved to :class:`~flask_admin.theme.BootstrapTheme`
+
+
+
 Working With the Built-in Templates
-==================================
+===================================
 
-****
-
-Flask-Admin uses the `Jinja2 <http://jinja.pocoo.org/docs/>`_ templating engine.
+Flask-Admin uses the `Jinja2 <https://jinja.palletsprojects.com/>`_ templating engine.
 
 .. _extending-builtin-templates:
 
 Extending the Built-in Templates
--------------------------------
+--------------------------------
 
 Rather than overriding the built-in templates completely, it's best to extend them. This
 will make it simpler for you to upgrade to new Flask-Admin versions in future.
@@ -411,12 +640,12 @@ Now, to make your view classes use this template, set the appropriate class prop
         # details_modal_template = 'microblog_details_modal.html'
 
 If you want to use your own base template, then pass the name of the template to
-the admin constructor during initialization::
+the admin theme during initialization::
 
-    admin = Admin(app, base_template='microblog_master.html')
+    admin = Admin(app, Bootstrap4Theme(base_template='microblog_master.html'))
 
 Overriding the Built-in Templates
---------------------------------
+---------------------------------
 
 To take full control over the style and layout of the admin interface, you can override
 all of the built-in templates. Just keep in mind that the templates will change slightly
@@ -448,6 +677,7 @@ main_menu      Main menu
 menu_links     Links menu
 access_control Section to the right of the menu (can be used to add login/logout buttons)
 messages       Alerts and various messages
+page_title     Page title containing the view name and icon
 body           Content (that's where your view will be displayed)
 tail           Empty area below content
 ============== ========================================================================
@@ -458,29 +688,30 @@ also contains the following blocks:
 ======================= ============================================
 Block Name              Description
 ======================= ============================================
-model_menu_bar          Menu bar
-model_list_table  		Table container
-list_header       		Table header row
+model_menu_bar          Menu bar for the model view with add/export/etc buttons
+model_list_table  		  Table container for the list view
+list_header       		  Table header row for the list view
 list_row_actions_header Actions header
 list_row                Single row
 list_row_actions        Row action cell with edit/remove/etc buttons
 empty_list_message      Message that will be displayed if there are no models found
 ======================= ============================================
 
-Have a look at the `layout` example at https://github.com/flask-admin/flask-admin/tree/master/examples/custom-layout
+Have a look at the `layout` example at https://github.com/pallets-eco/flask-admin/tree/master/examples/custom-layout
 to see how you can take full stylistic control over the admin interface.
 
-Environment Variables
----------------------
+Template Context Variables
+--------------------------
 
 While working in any of the templates that extend `admin/master.html`, you have access to a small number of
-environment variables:
+context variables:
 
 ==================== ================================
 Variable Name        Description
 ==================== ================================
 admin_view           Current administrative view
 admin_base_template  Base template name
+theme                The Theme configuration passed into Flask-Admin at instantiation
 _gettext             Babel gettext
 _ngettext            Babel ngettext
 h                    Helpers from :mod:`~flask_admin.helpers` module
@@ -492,6 +723,7 @@ Generating URLs
 To generate the URL for a specific view, use *url_for* with a dot prefix::
 
     from flask import url_for
+    from flask_admin import expose
 
     class MyView(BaseView):
         @expose('/')

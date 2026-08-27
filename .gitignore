@@ -13,13 +13,14 @@ flask_admin/tests/tmp
 dist/*
 make.bat
 venv
+.venv
 *.sublime-*
 .coverage
 __pycache__
 examples/sqla-inline/static
 examples/file/files
 examples/forms/files
-examples/appengine/lib
+examples/**/uv.lock
 .DS_Store
 .idea/
 *.sqlite
@@ -27,3 +28,13 @@ env
 *.egg
 .eggs
 .tox/
+.env
+doc/_build
+.vscode
+
+
+# Testing only
+flask_admin/tests/fileadmin/files/*
+f.html
+/instance/file:mem
+/instance/file:test_different_bind_joins\[with_session_deprecated-SQLALiteProvider\]

@@ -1,59 +1,85 @@
 import logging
+import re
+import typing as t
 
-from flask import request, flash, abort, Response
+import gridfs
+import mongoengine
+from bson.objectid import ObjectId
+from flask import abort
+from flask import flash
+from flask import request
+from flask import Response
+from flask import send_file
+from mongoengine import Document
+from mongoengine import QuerySet
+from mongoengine.connection import get_db
+from wtforms.form import Form
 
 from flask_admin import expose
-from flask_admin.babel import gettext, ngettext, lazy_gettext
-from flask_admin.model import BaseModelView
-from flask_admin.model.form import create_editable_list_form
-from flask_admin._compat import iteritems, string_types
-
-import mongoengine
-import gridfs
-from mongoengine.connection import get_db
-from bson.objectid import ObjectId
-
+from flask_admin._compat import iteritems
+from flask_admin._compat import string_types
 from flask_admin.actions import action
-from .filters import FilterConverter, BaseMongoEngineFilter
-from .form import get_form, CustomModelConverter
-from .typefmt import DEFAULT_FORMATTERS
-from .tools import parse_like_term
+from flask_admin.babel import gettext
+from flask_admin.babel import lazy_gettext
+from flask_admin.babel import ngettext
+from flask_admin.contrib.mongoengine.ajax import QueryAjaxModelLoader
+from flask_admin.contrib.mongoengine.helpers import gridfs_content_type
+from flask_admin.model import BaseModelView
+from flask_admin.model.form import BaseListForm
+from flask_admin.model.form import create_editable_list_form
+
+from ..._types import T_AJAX_MODEL_LOADER
+from ..._types import T_COLUMN_TYPE_FORMATTERS
+from ..._types import T_FIELD_ARGS_VALIDATORS_FILES
+from ..._types import T_MONGO_ENGINE_DOCUMENT
+from ..._types import T_WIDGET
+from .ajax import create_ajax_loader
+from .ajax import process_ajax_references
+from .filters import BaseMongoEngineFilter
+from .filters import FilterConverter
+from .form import CustomModelConverter
+from .form import get_form
 from .helpers import format_error
-from .ajax import process_ajax_references, create_ajax_loader
 from .subdoc import convert_subdocuments
+from .tools import parse_like_term
+from .typefmt import DEFAULT_FORMATTERS
 
 # Set up logger
 log = logging.getLogger("flask-admin.mongo")
 
 
-SORTABLE_FIELDS = set((
-    mongoengine.StringField,
-    mongoengine.IntField,
-    mongoengine.FloatField,
-    mongoengine.BooleanField,
-    mongoengine.DateTimeField,
-    mongoengine.ComplexDateTimeField,
-    mongoengine.ObjectIdField,
-    mongoengine.DecimalField,
-    mongoengine.ReferenceField,
-    mongoengine.EmailField,
-    mongoengine.UUIDField,
-    mongoengine.URLField
-))
+SORTABLE_FIELDS = set(
+    (
+        mongoengine.StringField,
+        mongoengine.IntField,
+        mongoengine.FloatField,
+        mongoengine.BooleanField,
+        mongoengine.DateTimeField,
+        mongoengine.ComplexDateTimeField,
+        mongoengine.ObjectIdField,
+        mongoengine.DecimalField,
+        mongoengine.ReferenceField,
+        mongoengine.EmailField,
+        mongoengine.UUIDField,
+        mongoengine.URLField,
+    )
+)
 
 
 class ModelView(BaseModelView):
     """
-        MongoEngine model scaffolding.
+    MongoEngine model scaffolding.
     """
 
-    column_filters = None
+    column_filters: t.Collection[str | BaseMongoEngineFilter] | None = None
     """
-        Collection of the column filters.
+        Collection of column filters used in the list view.
 
-        Can contain either field names or instances of
-        :class:`flask_admin.contrib.mongoengine.filters.BaseMongoEngineFilter`
-        classes.
+        Can contain either:
+        - Field names (str): allow any appropriate filter operation based on the
+        field’s data type.
+        - Instances of :class:`~flask_admin.contrib.mongoengine.filters.BaseFilter`
+        classes: restrict or customize which filters are available for a specific field.
 
         Filters will be grouped by name when displayed in the drop-down.
 
@@ -74,7 +100,7 @@ class ModelView(BaseModelView):
             from flask_admin.contrib.mongoengine.filters import BaseMongoEngineFilter
 
             class FilterLastNameBrown(BaseMongoEngineFilter):
-                def apply(self, query, value):
+                def apply(self, query: QuerySet, value: t.Any) -> QuerySet:
                     if value == '1':
                         return query.filter(self.column == "Brown")
                     else:
@@ -133,24 +159,27 @@ class ModelView(BaseModelView):
         Override this attribute to use a non-default converter.
     """
 
-    column_type_formatters = DEFAULT_FORMATTERS
+    column_type_formatters: T_COLUMN_TYPE_FORMATTERS = DEFAULT_FORMATTERS
     """
         Customized type formatters for MongoEngine backend
     """
 
-    allowed_search_types = (mongoengine.StringField,
-                            mongoengine.URLField,
-                            mongoengine.EmailField,
-                            mongoengine.ReferenceField)
+    allowed_search_types = (
+        mongoengine.StringField,
+        mongoengine.URLField,
+        mongoengine.EmailField,
+        mongoengine.ReferenceField,
+    )
     """
         List of allowed search field types.
     """
 
-    form_subdocuments = None
+    form_subdocuments: dict[t.Any, t.Any] | None = None
     """
         Subdocument configuration options.
 
-        This field accepts dictionary, where key is field name and value is either dictionary or instance of the
+        This field accepts dictionary, where key is field name and value is
+        either dictionary or instance of the
         `flask_admin.contrib.mongoengine.EmbeddedForm`.
 
         Consider following example::
@@ -170,7 +199,8 @@ class ModelView(BaseModelView):
                     }
                 }
 
-        In this example, `Post` model has child `Comment` subdocument. When generating form for `Comment` embedded
+        In this example, `Post` model has child `Comment` subdocument.
+        When generating form for `Comment` embedded
         document, Flask-Admin will only create `name` field.
 
         It is also possible to use class-based embedded document configuration::
@@ -225,47 +255,66 @@ class ModelView(BaseModelView):
                 }
     """
 
-    def __init__(self, model, name=None,
-                 category=None, endpoint=None, url=None, static_folder=None,
-                 menu_class_name=None, menu_icon_type=None, menu_icon_value=None):
+    form_columns: list[str] | None = None
+
+    def __init__(
+        self,
+        model: type[T_MONGO_ENGINE_DOCUMENT],
+        name: str | None = None,
+        category: str | None = None,
+        endpoint: str | None = None,
+        url: str | None = None,
+        static_folder: str | None = None,
+        menu_class_name: str | None = None,
+        menu_icon_type: str | None = None,
+        menu_icon_value: str | None = None,
+    ) -> None:
         """
-            Constructor
+        Constructor
 
-            :param model:
-                Model class
-            :param name:
-                Display name
-            :param category:
-                Display category
-            :param endpoint:
-                Endpoint
-            :param url:
-                Custom URL
-            :param menu_class_name:
-                Optional class name for the menu item.
-            :param menu_icon_type:
-                Optional icon. Possible icon types:
+        :param model:
+            Model class
+        :param name:
+            Display name
+        :param category:
+            Display category
+        :param endpoint:
+            Endpoint
+        :param url:
+            Custom URL
+        :param menu_class_name:
+            Optional class name for the menu item.
+        :param menu_icon_type:
+            Optional icon. Possible icon types:
 
-                 - `flask_admin.consts.ICON_TYPE_GLYPH` - Bootstrap glyph icon
-                 - `flask_admin.consts.ICON_TYPE_FONT_AWESOME` - Font Awesome icon
-                 - `flask_admin.consts.ICON_TYPE_IMAGE` - Image relative to Flask static directory
-                 - `flask_admin.consts.ICON_TYPE_IMAGE_URL` - Image with full URL
+             - `flask_admin.consts.ICON_TYPE_GLYPH` - Bootstrap glyph icon
+             - `flask_admin.consts.ICON_TYPE_FONT_AWESOME` - Font Awesome icon
+             - `flask_admin.consts.ICON_TYPE_IMAGE` - Image relative to
+                                                      Flask static directory
+             - `flask_admin.consts.ICON_TYPE_IMAGE_URL` - Image with full URL
 
-            :param menu_icon_value:
-                Icon glyph name or URL, depending on `menu_icon_type` setting
+        :param menu_icon_value:
+            Icon glyph name or URL, depending on `menu_icon_type` setting
         """
-        self._search_fields = []
+        self._search_fields: list[t.Any] = []
 
-        super(ModelView, self).__init__(model, name, category, endpoint, url, static_folder,
-                                        menu_class_name=menu_class_name,
-                                        menu_icon_type=menu_icon_type,
-                                        menu_icon_value=menu_icon_value)
-
+        super().__init__(
+            model,
+            name,
+            category,
+            endpoint,
+            url,
+            static_folder,
+            menu_class_name=menu_class_name,
+            menu_icon_type=menu_icon_type,
+            menu_icon_value=menu_icon_value,
+        )
+        self.model: type[T_MONGO_ENGINE_DOCUMENT]
         self._primary_key = self.scaffold_pk()
 
-    def _refresh_cache(self):
+    def _refresh_cache(self) -> None:
         """
-            Refresh cache.
+        Refresh cache.
         """
         # Process subdocuments
         if self.form_subdocuments is None:
@@ -274,48 +323,50 @@ class ModelView(BaseModelView):
         self._form_subdocuments = convert_subdocuments(self.form_subdocuments)
 
         # Cache other properties
-        super(ModelView, self)._refresh_cache()
+        super()._refresh_cache()
 
-    def _process_ajax_references(self):
+    def _process_ajax_references(self) -> dict[str, T_AJAX_MODEL_LOADER]:
         """
-            AJAX endpoint is exposed by top-level admin view class, but
-            subdocuments might have AJAX references too.
+        AJAX endpoint is exposed by top-level admin view class, but
+        subdocuments might have AJAX references too.
 
-            This method will recursively go over subdocument configuration
-            and will precompute AJAX references for them ensuring that
-            subdocuments can also use AJAX to populate their ReferenceFields.
+        This method will recursively go over subdocument configuration
+        and will precompute AJAX references for them ensuring that
+        subdocuments can also use AJAX to populate their ReferenceFields.
         """
-        references = super(ModelView, self)._process_ajax_references()
+        references = super()._process_ajax_references()
         return process_ajax_references(references, self)
 
-    def _get_model_fields(self, model=None):
+    def _get_model_fields(
+        self, model: type[T_MONGO_ENGINE_DOCUMENT] | None = None
+    ) -> list[tuple[t.Any, t.Any]]:
         """
-            Inspect model and return list of model fields
+        Inspect model and return list of model fields
 
-            :param model:
-                Model to inspect
+        :param model:
+            Model to inspect
         """
         if model is None:
             model = self.model
 
         return sorted(iteritems(model._fields), key=lambda n: n[1].creation_counter)
 
-    def scaffold_pk(self):
+    def scaffold_pk(self) -> str:
         # MongoEngine models have predefined 'id' as a key
-        return 'id'
+        return "id"
 
-    def get_pk_value(self, model):
+    def get_pk_value(self, model: type[T_MONGO_ENGINE_DOCUMENT]) -> t.Any:  # type: ignore[override]
         """
-            Return the primary key value from the model instance
+        Return the primary key value from the model instance
 
-            :param model:
-                Model instance
+        :param model:
+            Model instance
         """
         return model.pk
 
-    def scaffold_list_columns(self):
+    def scaffold_list_columns(self) -> list[str]:
         """
-            Scaffold list columns
+        Scaffold list columns
         """
         columns = []
 
@@ -323,8 +374,9 @@ class ModelView(BaseModelView):
             # Verify type
             field_class = type(f)
 
-            if (field_class == mongoengine.ListField and
-                    isinstance(f.field, mongoengine.EmbeddedDocumentField)):
+            if field_class == mongoengine.ListField and isinstance(
+                f.field, mongoengine.EmbeddedDocumentField
+            ):
                 continue
 
             if field_class == mongoengine.EmbeddedDocumentField:
@@ -335,9 +387,9 @@ class ModelView(BaseModelView):
 
         return columns
 
-    def scaffold_sortable_columns(self):
+    def scaffold_sortable_columns(self) -> dict[str, t.Any]:  # type: ignore[override]
         """
-            Return a dictionary of sortable columns (name, field)
+        Return a dictionary of sortable columns (name, field)
         """
         columns = {}
 
@@ -348,9 +400,9 @@ class ModelView(BaseModelView):
 
         return columns
 
-    def init_search(self):
+    def init_search(self) -> bool:
         """
-            Init search
+        Init search
         """
         if self.column_searchable_list:
             for p in self.column_searchable_list:
@@ -358,25 +410,27 @@ class ModelView(BaseModelView):
                     p = self.model._fields.get(p)
 
                 if p is None:
-                    raise Exception('Invalid search field')
+                    raise Exception("Invalid search field")
 
                 field_type = type(p)
 
                 # Check type
-                if (field_type not in self.allowed_search_types):
-                    raise Exception('Can only search on text columns. ' +
-                                    'Failed to setup search for "%s"' % p)
+                if field_type not in self.allowed_search_types:
+                    raise Exception(
+                        "Can only search on text columns. "
+                        + f'Failed to setup search for "{p}"'
+                    )
 
                 self._search_fields.append(p)
 
         return bool(self._search_fields)
 
-    def scaffold_filters(self, name):
+    def scaffold_filters(self, name: str) -> t.Any:  # type: ignore[override]
         """
-            Return filter object(s) for the field
+        Return filter object(s) for the field
 
-            :param name:
-                Either field name or field instance
+        :param name:
+            Either field name or field instance
         """
         if isinstance(name, string_types):
             attr = self.model._fields.get(name)
@@ -384,7 +438,7 @@ class ModelView(BaseModelView):
             attr = name
 
         if attr is None:
-            raise Exception('Failed to find field for filter: %s' % name)
+            raise Exception(f"Failed to find field for filter: {name}")
 
         # Find name
         visible_name = None
@@ -397,67 +451,72 @@ class ModelView(BaseModelView):
 
         # Convert filter
         type_name = type(attr).__name__
-        flt = self.filter_converter.convert(type_name,
-                                            attr,
-                                            visible_name)
+        flt = self.filter_converter.convert(type_name, attr, visible_name)
 
         return flt
 
-    def is_valid_filter(self, filter):
+    def is_valid_filter(self, filter: BaseMongoEngineFilter) -> bool:  # type: ignore[override]
         """
-            Validate if the provided filter is a valid MongoEngine filter
+        Validate if the provided filter is a valid MongoEngine filter
 
-            :param filter:
-                Filter object
+        :param filter:
+            Filter object
         """
         return isinstance(filter, BaseMongoEngineFilter)
 
-    def scaffold_form(self):
+    def scaffold_form(self) -> type:
         """
-            Create form from the model.
+        Create form from the model.
         """
-        form_class = get_form(self.model,
-                              self.model_form_converter(self),
-                              base_class=self.form_base_class,
-                              only=self.form_columns,
-                              exclude=self.form_excluded_columns,
-                              field_args=self.form_args,
-                              extra_fields=self.form_extra_fields)
+        form_class = get_form(
+            self.model,
+            self.model_form_converter(self),
+            base_class=self.form_base_class,
+            only=self.form_columns,
+            exclude=self.form_excluded_columns,
+            field_args=self.form_args,
+            extra_fields=self.form_extra_fields,  # type: ignore[arg-type]
+        )
 
         return form_class
 
-    def scaffold_list_form(self, widget=None, validators=None):
+    def scaffold_list_form(
+        self,
+        widget: type[T_WIDGET] | None = None,
+        validators: dict[str, T_FIELD_ARGS_VALIDATORS_FILES] | None = None,
+    ) -> type[BaseListForm]:
         """
-            Create form for the `index_view` using only the columns from
-            `self.column_editable_list`.
+        Create form for the `index_view` using only the columns from
+        `self.column_editable_list`.
 
-            :param widget:
-                WTForms widget class. Defaults to `XEditableWidget`.
-            :param validators:
-                `form_args` dict with only validators
-                {'name': {'validators': [required()]}}
+        :param widget:
+            WTForms widget class. Defaults to `XEditableWidget`.
+        :param validators:
+            `form_args` dict with only validators
+            {'name': {'validators': [required()]}}
         """
-        form_class = get_form(self.model,
-                              self.model_form_converter(self),
-                              base_class=self.form_base_class,
-                              only=self.column_editable_list,
-                              field_args=validators)
+        form_class = get_form(
+            self.model,
+            self.model_form_converter(self),
+            base_class=self.form_base_class,
+            only=self.column_editable_list,
+            field_args=validators,
+        )
 
-        return create_editable_list_form(self.form_base_class, form_class,
-                                         widget)
+        return create_editable_list_form(self.form_base_class, form_class, widget)
 
     # AJAX foreignkey support
-    def _create_ajax_loader(self, name, opts):
+    def _create_ajax_loader(self, name: str, opts: t.Any) -> QueryAjaxModelLoader:
         return create_ajax_loader(self.model, name, name, opts)
 
-    def get_query(self):
+    def get_query(self) -> QuerySet:
         """
         Returns the QuerySet for this view.  By default, it returns all the
         objects for the current model.
         """
         return self.model.objects
 
-    def _search(self, query, search_term):
+    def _search(self, query: QuerySet, search_term: str) -> t.Any:
         # TODO: Unfortunately, MongoEngine contains bug which
         # prevents running complex Q queries and, as a result,
         # Flask-Admin does not support per-word searching like
@@ -468,11 +527,10 @@ class ModelView(BaseModelView):
 
         for field in self._search_fields:
             if type(field) == mongoengine.ReferenceField:
-                import re
-                regex = re.compile('.*%s.*' % term)
+                regex: str | re.Pattern[str] = re.compile(".*{term}.*")
             else:
                 regex = term
-            flt = {'%s__%s' % (field.name, op): regex}
+            flt = {f"{field.name}__{op}": regex}
             q = mongoengine.Q(**flt)
 
             if criteria is None:
@@ -482,33 +540,41 @@ class ModelView(BaseModelView):
 
         return query.filter(criteria)
 
-    def get_list(self, page, sort_column, sort_desc, search, filters,
-                 execute=True, page_size=None):
+    def get_list(  # type: ignore[override]
+        self,
+        page: int | None,
+        sort_column: str,
+        sort_desc: bool,
+        search: str | None,
+        filters: t.Sequence[tuple[int, str, str]] | None,
+        execute: bool = True,
+        page_size: int | None = None,
+    ) -> tuple[int | None, Document]:
         """
-            Get list of objects from MongoEngine
+        Get list of objects from MongoEngine
 
-            :param page:
-                Page number
-            :param sort_column:
-                Sort column
-            :param sort_desc:
-                Sort descending
-            :param search:
-                Search criteria
-            :param filters:
-                List of applied filters
-            :param execute:
-                Run query immediately or not
-            :param page_size:
-                Number of results. Defaults to ModelView's page_size. Can be
-                overriden to change the page_size limit. Removing the page_size
-                limit requires setting page_size to 0 or False.
+        :param page:
+            Page number
+        :param sort_column:
+            Sort column
+        :param sort_desc:
+            Sort descending
+        :param search:
+            Search criteria
+        :param filters:
+            List of applied filters
+        :param execute:
+            Run query immediately or not
+        :param page_size:
+            Number of results. Defaults to ModelView's page_size. Can be
+            overriden to change the page_size limit. Removing the page_size
+            limit requires setting page_size to 0 or False.
         """
         query = self.get_query()
 
         # Filters
         if self._filters:
-            for flt, flt_name, value in filters:
+            for flt, _flt_name, value in filters:  # type: ignore[union-attr]
                 f = self._filters[flt]
                 query = f.apply(query, f.clean(value))
 
@@ -521,13 +587,13 @@ class ModelView(BaseModelView):
 
         # Sorting
         if sort_column:
-            query = query.order_by('%s%s' % ('-' if sort_desc else '', sort_column))
+            sort_op = "-" if sort_desc else ""
+            query = query.order_by(f"{sort_op}{sort_column}")
         else:
             order = self._get_default_order()
 
             if order:
-                keys = ['%s%s' % ('-' if desc else '', col)
-                        for (col, desc) in order]
+                keys = [f"{'-' if desc else ''}{col}" for col, desc in order]
                 query = query.order_by(*keys)
 
         # Pagination
@@ -545,27 +611,28 @@ class ModelView(BaseModelView):
 
         return count, query
 
-    def get_one(self, id):
+    def get_one(self, id: t.Any) -> t.Any | None:
         """
-            Return a single model instance by its ID
+        Return a single model instance by its ID
 
-            :param id:
-                Model ID
+        :param id:
+            Model ID
         """
         try:
             return self.get_query().filter(pk=id).first()
         except mongoengine.ValidationError as ex:
-            flash(gettext('Failed to get model. %(error)s',
-                          error=format_error(ex)),
-                  'error')
+            flash(
+                gettext("Failed to get model. %(error)s", error=format_error(ex)),
+                "error",
+            )
             return None
 
-    def create_model(self, form):
+    def create_model(self, form: Form) -> Document | bool:
         """
-            Create model helper
+        Create model helper
 
-            :param form:
-                Form instance
+        :param form:
+            Form instance
         """
         try:
             model = self.model()
@@ -574,10 +641,13 @@ class ModelView(BaseModelView):
             model.save()
         except Exception as ex:
             if not self.handle_view_exception(ex):
-                flash(gettext('Failed to create record. %(error)s',
-                              error=format_error(ex)),
-                      'error')
-                log.exception('Failed to create record.')
+                flash(
+                    gettext(
+                        "Failed to create record. %(error)s", error=format_error(ex)
+                    ),
+                    "error",
+                )
+                log.exception("Failed to create record.")
 
             return False
         else:
@@ -585,14 +655,14 @@ class ModelView(BaseModelView):
 
         return model
 
-    def update_model(self, form, model):
+    def update_model(self, form: Form, model: type[T_MONGO_ENGINE_DOCUMENT]) -> bool:  # type: ignore[override]
         """
-            Update model helper
+        Update model helper
 
-            :param form:
-                Form instance
-            :param model:
-                Model instance to update
+        :param form:
+            Form instance
+        :param model:
+            Model instance to update
         """
         try:
             form.populate_obj(model)
@@ -600,10 +670,13 @@ class ModelView(BaseModelView):
             model.save()
         except Exception as ex:
             if not self.handle_view_exception(ex):
-                flash(gettext('Failed to update record. %(error)s',
-                              error=format_error(ex)),
-                      'error')
-                log.exception('Failed to update record.')
+                flash(
+                    gettext(
+                        "Failed to update record. %(error)s", error=format_error(ex)
+                    ),
+                    "error",
+                )
+                log.exception("Failed to update record.")
 
             return False
         else:
@@ -611,22 +684,25 @@ class ModelView(BaseModelView):
 
         return True
 
-    def delete_model(self, model):
+    def delete_model(self, model: type[T_MONGO_ENGINE_DOCUMENT]) -> bool:  # type: ignore[override]
         """
-            Delete model helper
+        Delete model helper
 
-            :param model:
-                Model instance
+        :param model:
+            Model instance
         """
         try:
             self.on_model_delete(model)
             model.delete()
         except Exception as ex:
             if not self.handle_view_exception(ex):
-                flash(gettext('Failed to delete record. %(error)s',
-                              error=format_error(ex)),
-                      'error')
-                log.exception('Failed to delete record.')
+                flash(
+                    gettext(
+                        "Failed to delete record. %(error)s", error=format_error(ex)
+                    ),
+                    "error",
+                )
+                log.exception("Failed to delete record.")
 
             return False
         else:
@@ -635,11 +711,11 @@ class ModelView(BaseModelView):
         return True
 
     # FileField access API
-    @expose('/api/file/')
-    def api_file_view(self):
-        pk = request.args.get('id')
-        coll = request.args.get('coll')
-        db = request.args.get('db', 'default')
+    @expose("/api/file/")
+    def api_file_view(self) -> Response:
+        pk = request.args.get("id")
+        coll = request.args.get("coll")
+        db = request.args.get("db", "default")
 
         if not pk or not coll or not db:
             abort(404)
@@ -650,22 +726,27 @@ class ModelView(BaseModelView):
         if not data:
             abort(404)
 
-        return Response(data.read(),
-                        content_type=data.content_type,
-                        headers={'Content-Length': data.length})
+        return send_file(
+            data,
+            mimetype=gridfs_content_type(data),
+            download_name=data.filename,
+            as_attachment=False,
+        )
 
     # Default model actions
-    def is_action_allowed(self, name):
+    def is_action_allowed(self, name: str) -> bool:
         # Check delete action permission
-        if name == 'delete' and not self.can_delete:
+        if name == "delete" and not self.can_delete:
             return False
 
-        return super(ModelView, self).is_action_allowed(name)
+        return super().is_action_allowed(name)
 
-    @action('delete',
-            lazy_gettext('Delete'),
-            lazy_gettext('Are you sure you want to delete selected records?'))
-    def action_delete(self, ids):
+    @action(
+        "delete",
+        lazy_gettext("Delete"),
+        lazy_gettext("Are you sure you want to delete selected records?"),
+    )
+    def action_delete(self, ids: t.Any) -> None:
         try:
             count = 0
 
@@ -673,11 +754,18 @@ class ModelView(BaseModelView):
             for obj in self.get_query().in_bulk(all_ids).values():
                 count += self.delete_model(obj)
 
-            flash(ngettext('Record was successfully deleted.',
-                           '%(count)s records were successfully deleted.',
-                           count,
-                           count=count), 'success')
+            flash(
+                ngettext(
+                    "Record was successfully deleted.",
+                    "%(count)s records were successfully deleted.",
+                    count,
+                    count=count,
+                ),
+                "success",
+            )
         except Exception as ex:
             if not self.handle_view_exception(ex):
-                flash(gettext('Failed to delete records. %(error)s', error=str(ex)),
-                      'error')
+                flash(
+                    gettext("Failed to delete records. %(error)s", error=str(ex)),
+                    "error",
+                )

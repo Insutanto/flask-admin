@@ -1,48 +1,66 @@
-from markupsafe import Markup, escape
+import typing as t
 
+from gridfs import GridOut
+from markupsafe import escape
+from markupsafe import Markup
 from mongoengine.base import BaseList
-from mongoengine.fields import GridFSProxy, ImageGridFsProxy
+from mongoengine.fields import GridFSProxy
+from mongoengine.fields import ImageGridFsProxy
 
-from flask_admin.model.typefmt import BASE_FORMATTERS, list_formatter
+from flask_admin.model.typefmt import BASE_FORMATTERS
+from flask_admin.model.typefmt import list_formatter
 
 from . import helpers
 
+if t.TYPE_CHECKING:
+    from . import ModelView
+else:
+    ModelView = t.Any
 
-def grid_formatter(view, value):
+
+def grid_formatter(view: ModelView, value: GridOut) -> Markup | str:
     if not value.grid_id:
-        return ''
+        return ""
 
     args = helpers.make_gridfs_args(value)
 
     return Markup(
-        ('<a href="%(url)s" target="_blank">' +
-            '<i class="icon-file"></i>%(name)s' +
-         '</a> %(size)dk (%(content_type)s)') %
-        {
-            'url': view.get_url('.api_file_view', **args),
-            'name': escape(value.name),
-            'size': value.length // 1024,
-            'content_type': escape(value.content_type)
-        })
+        (
+            '<a href="%(url)s" target="_blank">'
+            + '<i class="icon-file"></i>%(name)s'
+            + "</a> %(size)dk (%(content_type)s)"
+        )
+        % {
+            "url": view.get_url(".api_file_view", **args),
+            "name": escape(value.name),
+            "size": value.length // 1024,
+            "content_type": escape(helpers.gridfs_content_type(value) or ""),
+        }
+    )
 
 
-def grid_image_formatter(view, value):
+def grid_image_formatter(view: ModelView, value: ImageGridFsProxy) -> Markup | str:
     if not value.grid_id:
-        return ''
+        return ""
 
     return Markup(
-        ('<div class="image-thumbnail">' +
-            '<a href="%(url)s" target="_blank"><img src="%(thumb)s"/></a>' +
-         '</div>') %
-        {
-            'url': view.get_url('.api_file_view', **helpers.make_gridfs_args(value)),
-            'thumb': view.get_url('.api_file_view', **helpers.make_thumb_args(value)),
-        })
+        (
+            '<div class="image-thumbnail">'
+            + '<a href="%(url)s" target="_blank"><img src="%(thumb)s"/></a>'
+            + "</div>"
+        )
+        % {
+            "url": view.get_url(".api_file_view", **helpers.make_gridfs_args(value)),
+            "thumb": view.get_url(".api_file_view", **helpers.make_thumb_args(value)),
+        }
+    )
 
 
 DEFAULT_FORMATTERS = BASE_FORMATTERS.copy()
-DEFAULT_FORMATTERS.update({
-    BaseList: list_formatter,
-    GridFSProxy: grid_formatter,
-    ImageGridFsProxy: grid_image_formatter
-})
+DEFAULT_FORMATTERS.update(
+    {
+        BaseList: list_formatter,
+        GridFSProxy: grid_formatter,
+        ImageGridFsProxy: grid_image_formatter,
+    }
+)

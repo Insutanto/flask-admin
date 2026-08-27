@@ -1,17 +1,25 @@
 import logging
+import typing as t
+from typing import TypeGuard
 
 import pymongo
 from bson import ObjectId
 from bson.errors import InvalidId
-
 from flask import flash
+from wtforms.form import Form
 
 from flask_admin._compat import string_types
-from flask_admin.babel import gettext, ngettext, lazy_gettext
-from flask_admin.model import BaseModelView
 from flask_admin.actions import action
+from flask_admin.babel import gettext
+from flask_admin.babel import lazy_gettext
+from flask_admin.babel import ngettext
 from flask_admin.helpers import get_form_data
+from flask_admin.model import BaseModelView
 
+from ..._types import T_FILTER
+from ...model.filters import BaseFilter
+from ._types import T_PYMONGO_COLLECTION
+from ._types import T_PYMONGO_CURSOR
 from .filters import BasePyMongoFilter
 from .tools import parse_like_term
 
@@ -21,10 +29,10 @@ log = logging.getLogger("flask-admin.pymongo")
 
 class ModelView(BaseModelView):
     """
-        MongoEngine model scaffolding.
+    MongoEngine model scaffolding.
     """
 
-    column_filters = None
+    column_filters: t.Collection[str | BasePyMongoFilter] | None = None
     """
         Collection of the column filters.
 
@@ -63,81 +71,96 @@ class ModelView(BaseModelView):
                 ]
     """
 
-    def __init__(self, coll,
-                 name=None, category=None, endpoint=None, url=None,
-                 menu_class_name=None, menu_icon_type=None, menu_icon_value=None):
+    def __init__(
+        self,
+        coll: T_PYMONGO_COLLECTION,
+        name: str | None = None,
+        category: str | None = None,
+        endpoint: str | None = None,
+        url: str | None = None,
+        menu_class_name: str | None = None,
+        menu_icon_type: str | None = None,
+        menu_icon_value: str | None = None,
+    ) -> None:
         """
-            Constructor
+        Constructor
 
-            :param coll:
-                MongoDB collection object
-            :param name:
-                Display name
-            :param category:
-                Display category
-            :param endpoint:
-                Endpoint
-            :param url:
-                Custom URL
-            :param menu_class_name:
-                Optional class name for the menu item.
-            :param menu_icon_type:
-                Optional icon. Possible icon types:
+        :param coll:
+            MongoDB collection object
+        :param name:
+            Display name
+        :param category:
+            Display category
+        :param endpoint:
+            Endpoint
+        :param url:
+            Custom URL
+        :param menu_class_name:
+            Optional class name for the menu item.
+        :param menu_icon_type:
+            Optional icon. Possible icon types:
 
-                 - `flask_admin.consts.ICON_TYPE_GLYPH` - Bootstrap glyph icon
-                 - `flask_admin.consts.ICON_TYPE_FONT_AWESOME` - Font Awesome icon
-                 - `flask_admin.consts.ICON_TYPE_IMAGE` - Image relative to Flask static directory
-                 - `flask_admin.consts.ICON_TYPE_IMAGE_URL` - Image with full URL
-            :param menu_icon_value:
-                Icon glyph name or URL, depending on `menu_icon_type` setting
+             - `flask_admin.consts.ICON_TYPE_GLYPH` - Bootstrap glyph icon
+             - `flask_admin.consts.ICON_TYPE_FONT_AWESOME` - Font Awesome icon
+             - `flask_admin.consts.ICON_TYPE_IMAGE` - Image relative to Flask static
+                directory
+             - `flask_admin.consts.ICON_TYPE_IMAGE_URL` - Image with full URL
+        :param menu_icon_value:
+            Icon glyph name or URL, depending on `menu_icon_type` setting
         """
-        self._search_fields = []
+        self._search_fields: list[str] = []
 
         if name is None:
             name = self._prettify_name(coll.name)
 
         if endpoint is None:
-            endpoint = ('%sview' % coll.name).lower()
+            endpoint = (f"{coll.name}view").lower()
 
-        super(ModelView, self).__init__(None, name, category, endpoint, url,
-                                        menu_class_name=menu_class_name,
-                                        menu_icon_type=menu_icon_type,
-                                        menu_icon_value=menu_icon_value)
+        super().__init__(
+            None,  # type: ignore[arg-type]
+            name,
+            category,
+            endpoint,
+            url,
+            menu_class_name=menu_class_name,
+            menu_icon_type=menu_icon_type,
+            menu_icon_value=menu_icon_value,
+        )
 
         self.coll = coll
 
-    def scaffold_pk(self):
-        return '_id'
+    def scaffold_pk(self) -> str:
+        return "_id"
 
-    def get_pk_value(self, model):
+    def get_pk_value(self, model: t.Any) -> t.Any | tuple[str, ...]:
         """
-            Return primary key value from the model instance
+        Return primary key value from the model instance
 
-            :param model:
-                Model instance
+        :param model:
+            Model instance
         """
-        return model.get('_id')
+        return model.get("_id")
 
-    def scaffold_list_columns(self):
+    def scaffold_list_columns(self) -> list[str]:
         """
-            Scaffold list columns
+        Scaffold list columns
         """
         raise NotImplementedError()
 
-    def scaffold_sortable_columns(self):
+    def scaffold_sortable_columns(self) -> t.Any:
         """
-            Return sortable columns dictionary (name, field)
+        Return sortable columns dictionary (name, field)
         """
         return []
 
-    def init_search(self):
+    def init_search(self) -> bool:
         """
-            Init search
+        Init search
         """
         if self.column_searchable_list:
             for p in self.column_searchable_list:
                 if not isinstance(p, string_types):
-                    raise ValueError('Expected string')
+                    raise ValueError("Expected string")
 
                 # TODO: Validation?
 
@@ -145,37 +168,37 @@ class ModelView(BaseModelView):
 
         return bool(self._search_fields)
 
-    def scaffold_filters(self, attr):
+    def scaffold_filters(self, attr: t.Any) -> t.Any:
         """
-            Return filter object(s) for the field
+        Return filter object(s) for the field
 
-            :param name:
-                Either field name or field instance
+        :param name:
+            Either field name or field instance
         """
         raise NotImplementedError()
 
-    def is_valid_filter(self, filter):
+    def is_valid_filter(self, filter: BaseFilter | t.Any) -> TypeGuard[BaseFilter]:
         """
-            Validate if it is valid MongoEngine filter
+        Validate if it is valid MongoEngine filter
 
-            :param filter:
-                Filter object
+        :param filter:
+            Filter object
         """
         return isinstance(filter, BasePyMongoFilter)
 
-    def scaffold_form(self):
+    def scaffold_form(self) -> t.Any:
         raise NotImplementedError()
 
-    def _get_field_value(self, model, name):
+    def _get_field_value(self, model: t.Any, name: str) -> t.Any:  # type: ignore[override]
         """
-            Get unformatted field value from the model
+        Get unformatted field value from the model
         """
         return model.get(name)
 
-    def _search(self, query, search_term):
-        values = search_term.split(' ')
+    def _search(self, query: dict[str, t.Any], search_term: str) -> dict[str, t.Any]:
+        values = search_term.split(" ")
 
-        queries = []
+        queries: list[dict[str, t.Any]] = []
 
         # Construct inner querie
         for value in values:
@@ -186,84 +209,99 @@ class ModelView(BaseModelView):
 
             stmt = []
             for field in self._search_fields:
-                stmt.append({field: {'$regex': regex}})
+                stmt.append({field: {"$regex": regex}})
 
             if stmt:
                 if len(stmt) == 1:
                     queries.append(stmt[0])
                 else:
-                    queries.append({'$or': stmt})
+                    queries.append({"$or": stmt})
 
         # Construct final query
         if queries:
             if len(queries) == 1:
                 final = queries[0]
             else:
-                final = {'$and': queries}
+                final = {"$and": queries}
 
             if query:
-                query = {'$and': [query, final]}
+                query = {"$and": [query, final]}
             else:
                 query = final
 
         return query
 
-    def get_list(self, page, sort_column, sort_desc, search, filters,
-                 execute=True, page_size=None):
-        """
-            Get list of objects from MongoEngine
+    def get_query(self) -> dict[str, t.Any]:
+        return {}
 
-            :param page:
-                Page number
-            :param sort_column:
-                Sort column
-            :param sort_desc:
-                Sort descending
-            :param search:
-                Search criteria
-            :param filters:
-                List of applied fiters
-            :param execute:
-                Run query immediately or not
-            :param page_size:
-                Number of results. Defaults to ModelView's page_size. Can be
-                overriden to change the page_size limit. Removing the page_size
-                limit requires setting page_size to 0 or False.
+    def get_list(  # type: ignore[override]
+        self,
+        page: int | None,
+        sort_column: str | None,
+        sort_desc: bool,
+        search: str | None,
+        filters: t.Sequence[T_FILTER] | None,
+        execute: bool = True,
+        page_size: int | None = None,
+    ) -> tuple[int | None, list[t.Any] | T_PYMONGO_CURSOR]:
         """
-        query = {}
+        Get list of objects from MongoEngine
+
+        :param page:
+            Page number
+        :param sort_column:
+            Sort column
+        :param sort_desc:
+            Sort descending
+        :param search:
+            Search criteria
+        :param filters:
+            List of applied fiters
+        :param execute:
+            Run query immediately or not
+        :param page_size:
+            Number of results. Defaults to ModelView's page_size. Can be
+            overriden to change the page_size limit. Removing the page_size
+            limit requires setting page_size to 0 or False.
+        """
+        query = self.get_query()
 
         # Filters
         if self._filters:
-            data = []
+            data: list[str] | str = []
 
-            for flt, flt_name, value in filters:
+            for flt, _flt_name, value in filters:  # type: ignore[union-attr]
                 f = self._filters[flt]
                 data = f.apply(data, f.clean(value))
 
             if data:
                 if len(data) == 1:
-                    query = data[0]
+                    query = data[0]  # type: ignore[assignment]
                 else:
-                    query['$and'] = data
+                    query["$and"] = data
 
         # Search
         if self._search_supported and search:
             query = self._search(query, search)
 
         # Get count
-        count = self.coll.find(query).count() if not self.simple_list_pager else None
+        count = self.coll.count_documents(query) if not self.simple_list_pager else None
 
         # Sorting
         sort_by = None
 
         if sort_column:
-            sort_by = [(sort_column, pymongo.DESCENDING if sort_desc else pymongo.ASCENDING)]
+            sort_by = [
+                (sort_column, pymongo.DESCENDING if sort_desc else pymongo.ASCENDING)
+            ]
         else:
             order = self._get_default_order()
 
             if order:
-                sort_by = [(col, pymongo.DESCENDING if desc else pymongo.ASCENDING)
-                           for (col, desc) in order]
+                sort_by = [
+                    (col, pymongo.DESCENDING if desc else pymongo.ASCENDING)
+                    for (col, desc) in order
+                ]
 
         # Pagination
         if page_size is None:
@@ -277,96 +315,95 @@ class ModelView(BaseModelView):
         results = self.coll.find(query, sort=sort_by, skip=skip, limit=page_size)
 
         if execute:
-            results = list(results)
+            return count, list(results)
 
         return count, results
 
-    def _get_valid_id(self, id):
+    def _get_valid_id(
+        self, id: str | ObjectId | bytes | None
+    ) -> ObjectId | str | bytes | None:
         try:
             return ObjectId(id)
         except InvalidId:
             return id
 
-    def get_one(self, id):
+    def get_one(self, id: t.Any) -> t.Any:
         """
-            Return single model instance by ID
+        Return single model instance by ID
 
-            :param id:
-                Model ID
+        :param id:
+            Model ID
         """
-        return self.coll.find_one({'_id': self._get_valid_id(id)})
+        return self.coll.find_one({"_id": self._get_valid_id(id)})
 
-    def edit_form(self, obj):
+    def edit_form(self, obj: t.Any) -> Form:  # type: ignore[override]
         """
-            Create edit form from the MongoDB document
+        Create edit form from the MongoDB document
         """
         return self._edit_form_class(get_form_data(), **obj)
 
-    def create_model(self, form):
+    def create_model(self, form: Form) -> bool | t.Any:
         """
-            Create model helper
+        Create model helper
 
-            :param form:
-                Form instance
+        :param form:
+            Form instance
         """
         try:
             model = form.data
             self._on_model_change(form, model, True)
-            self.coll.insert(model)
+            self.coll.insert_one(model)
         except Exception as ex:
-            flash(gettext('Failed to create record. %(error)s', error=str(ex)),
-                  'error')
-            log.exception('Failed to create record.')
+            flash(gettext("Failed to create record. %(error)s", error=str(ex)), "error")
+            log.exception("Failed to create record.")
             return False
         else:
             self.after_model_change(form, model, True)
 
         return model
 
-    def update_model(self, form, model):
+    def update_model(self, form: Form, model: t.Any) -> bool:
         """
-            Update model helper
+        Update model helper
 
-            :param form:
-                Form instance
-            :param model:
-                Model instance to update
+        :param form:
+            Form instance
+        :param model:
+            Model instance to update
         """
         try:
             model.update(form.data)
             self._on_model_change(form, model, False)
 
             pk = self.get_pk_value(model)
-            self.coll.update({'_id': pk}, model)
+            self.coll.replace_one({"_id": pk}, model)
         except Exception as ex:
-            flash(gettext('Failed to update record. %(error)s', error=str(ex)),
-                  'error')
-            log.exception('Failed to update record.')
+            flash(gettext("Failed to update record. %(error)s", error=str(ex)), "error")
+            log.exception("Failed to update record.")
             return False
         else:
             self.after_model_change(form, model, False)
 
         return True
 
-    def delete_model(self, model):
+    def delete_model(self, model: t.Any) -> bool:
         """
-            Delete model helper
+        Delete model helper
 
-            :param model:
-                Model instance
+        :param model:
+            Model instance
         """
         try:
             pk = self.get_pk_value(model)
 
             if not pk:
-                raise ValueError('Document does not have _id')
+                raise ValueError("Document does not have _id")
 
             self.on_model_delete(model)
-            self.coll.remove({'_id': pk})
+            self.coll.delete_one({"_id": pk})
         except Exception as ex:
-            flash(gettext('Failed to delete record. %(error)s', error=str(ex)),
-                  'error')
-            log.exception('Failed to delete record.')
+            flash(gettext("Failed to delete record. %(error)s", error=str(ex)), "error")
+            log.exception("Failed to delete record.")
             return False
         else:
             self.after_model_delete(model)
@@ -374,17 +411,19 @@ class ModelView(BaseModelView):
         return True
 
     # Default model actions
-    def is_action_allowed(self, name):
+    def is_action_allowed(self, name: str) -> bool:
         # Check delete action permission
-        if name == 'delete' and not self.can_delete:
+        if name == "delete" and not self.can_delete:
             return False
 
-        return super(ModelView, self).is_action_allowed(name)
+        return super().is_action_allowed(name)
 
-    @action('delete',
-            lazy_gettext('Delete'),
-            lazy_gettext('Are you sure you want to delete selected records?'))
-    def action_delete(self, ids):
+    @action(
+        "delete",
+        lazy_gettext("Delete"),
+        lazy_gettext("Are you sure you want to delete selected records?"),
+    )
+    def action_delete(self, ids: t.Iterable[t.Any]) -> None:
         try:
             count = 0
 
@@ -393,9 +432,16 @@ class ModelView(BaseModelView):
                 if self.delete_model(self.get_one(pk)):
                     count += 1
 
-            flash(ngettext('Record was successfully deleted.',
-                           '%(count)s records were successfully deleted.',
-                           count,
-                           count=count), 'success')
+            flash(
+                ngettext(
+                    "Record was successfully deleted.",
+                    "%(count)s records were successfully deleted.",
+                    count,
+                    count=count,
+                ),
+                "success",
+            )
         except Exception as ex:
-            flash(gettext('Failed to delete records. %(error)s', error=str(ex)), 'error')
+            flash(
+                gettext("Failed to delete records. %(error)s", error=str(ex)), "error"
+            )

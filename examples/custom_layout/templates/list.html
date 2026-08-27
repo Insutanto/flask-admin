@@ -1,0 +1,7 @@
+{% extends 'admin/model/list.html' %}
+
+{% block model_menu_bar %}
+  <div class="alert alert-dark small py-1">Viewing all {{ admin_view.name }} records
+  </div>
+  {{ super() }}
+{% endblock %}

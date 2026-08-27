@@ -1,193 +1,230 @@
-from . import setup
+import typing as t
+
+from flask import Flask
+from sqlalchemy import Column
+from sqlalchemy import ForeignKey
+from sqlalchemy import Integer
+from sqlalchemy import String
+
+from ... import Admin
+from ..conftest import skip_or_return_session_or_db
+from ..conftest import T_ANY_SQLA_PROVIDER
+from ..conftest import T_LITERAL_SESSION_OR_DB
 from .test_basic import CustomModelView
 
-from flask_sqlalchemy import Model
-from sqlalchemy.ext.declarative import declarative_base
 
-
-def test_multiple_pk():
+def test_multiple_pk(
+    app: Flask,
+    sqla_db_ext: T_ANY_SQLA_PROVIDER,
+    admin: Admin,
+    session_or_db: T_LITERAL_SESSION_OR_DB,
+) -> None:
     # Test multiple primary keys - mix int and string together
-    app, db, admin = setup()
+    with app.app_context():
 
-    class Model(db.Model):
-        id = db.Column(db.Integer, primary_key=True)
-        id2 = db.Column(db.String(20), primary_key=True)
-        test = db.Column(db.String)
+        class Model(sqla_db_ext.Base):  # type: ignore[misc, name-defined]
+            __tablename__ = "model"
+            id = Column(Integer, primary_key=True)
+            id2 = Column(String(20), primary_key=True)
+            test = Column(String)
 
-    db.create_all()
+        sqla_db_ext.create_all()
 
-    view = CustomModelView(Model, db.session, form_columns=['id', 'id2', 'test'])
-    admin.add_view(view)
+        param = skip_or_return_session_or_db(sqla_db_ext, session_or_db)
+        view = CustomModelView(Model, param, form_columns=["id", "id2", "test"])
+        admin.add_view(view)
 
-    client = app.test_client()
+        client = app.test_client()
 
-    rv = client.get('/admin/model/')
-    assert rv.status_code == 200
+        rv = client.get("/admin/model/")
+        assert rv.status_code == 200
 
-    rv = client.post('/admin/model/new/',
-                     data=dict(id=1, id2='two', test='test3'))
-    assert rv.status_code == 302
+        rv = client.post("/admin/model/new/", data=dict(id=1, id2="two", test="test3"))
+        assert rv.status_code == 302
 
-    rv = client.get('/admin/model/')
-    assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'test3' in data
+        rv = client.get("/admin/model/")
+        assert rv.status_code == 200
+        data = rv.data.decode("utf-8")
+        assert "test3" in data
 
-    rv = client.get('/admin/model/edit/?id=1,two')
-    assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'test3' in data
+        rv = client.get("/admin/model/edit/?id=1,two")
+        assert rv.status_code == 200
+        data = rv.data.decode("utf-8")
+        assert "test3" in data
 
-    # Correct order is mandatory -> fail here
-    rv = client.get('/admin/model/edit/?id=two,1')
-    assert rv.status_code == 302
+        # Correct order is mandatory -> fail here
+        rv = client.get("/admin/model/edit/?id=two,1")
+        assert rv.status_code == 302
 
 
-def test_joined_inheritance():
+def test_joined_inheritance(
+    app: Flask,
+    sqla_db_ext: T_ANY_SQLA_PROVIDER,
+    admin: Admin,
+    session_or_db: T_LITERAL_SESSION_OR_DB,
+) -> None:
     # Test multiple primary keys - mix int and string together
-    app, db, admin = setup()
+    with app.app_context():
 
-    class Parent(db.Model):
-        id = db.Column(db.Integer, primary_key=True)
-        test = db.Column(db.String)
+        class Parent(sqla_db_ext.Base):  # type: ignore[misc, name-defined]
+            __tablename__ = "parent"
+            id = Column(Integer, primary_key=True)
+            test = Column(String)
 
-        discriminator = db.Column('type', db.String(50))
-        __mapper_args__ = {'polymorphic_on': discriminator}
+            discriminator = Column("type", String(50))
+            __mapper_args__ = {"polymorphic_on": discriminator}
+
+        class Child(Parent):
+            __tablename__ = "children"
+            __mapper_args__: dict[str, t.Any] = {"polymorphic_identity": "child"}
+
+            id = Column(ForeignKey(Parent.id), primary_key=True)
+            name = Column(String(100))
+
+        sqla_db_ext.create_all()
+
+        param = skip_or_return_session_or_db(sqla_db_ext, session_or_db)
+        view = CustomModelView(Child, param, form_columns=["id", "test", "name"])
+        admin.add_view(view)
+
+        client = app.test_client()
+
+        rv = client.get("/admin/child/")
+        assert rv.status_code == 200
+
+        rv = client.post("/admin/child/new/", data=dict(id=1, test="foo", name="bar"))
+        assert rv.status_code == 302
+
+        rv = client.get("/admin/child/edit/?id=1")
+        assert rv.status_code == 200
+        data = rv.data.decode("utf-8")
+        assert "foo" in data
+        assert "bar" in data
+
+
+def test_single_table_inheritance(
+    app: Flask,
+    sqla_db_ext: T_ANY_SQLA_PROVIDER,
+    admin: Admin,
+    session_or_db: T_LITERAL_SESSION_OR_DB,
+) -> None:
+    class Parent(sqla_db_ext.Base):  # type: ignore[misc, name-defined]
+        __tablename__ = "parent"
+
+        id = Column(Integer, primary_key=True)
+        test = Column(String)
+
+        discriminator = Column("type", String(50))
+        __mapper_args__ = {"polymorphic_on": discriminator}
 
     class Child(Parent):
-        __tablename__ = 'children'
-        __mapper_args__ = {'polymorphic_identity': 'child'}
+        __mapper_args__: dict[str, t.Any] = {"polymorphic_identity": "child"}
+        name = Column(String(100))
 
-        id = db.Column(db.ForeignKey(Parent.id), primary_key=True)
-        name = db.Column(db.String(100))
+    sqla_db_ext.create_all()
 
-    db.create_all()
-
-    view = CustomModelView(Child, db.session, form_columns=['id', 'test', 'name'])
+    param = skip_or_return_session_or_db(sqla_db_ext, session_or_db)
+    view = CustomModelView(Child, param, form_columns=["id", "test", "name"])
     admin.add_view(view)
 
     client = app.test_client()
 
-    rv = client.get('/admin/child/')
+    rv = client.get("/admin/child/")
     assert rv.status_code == 200
 
-    rv = client.post('/admin/child/new/',
-                     data=dict(id=1, test='foo', name='bar'))
+    rv = client.post("/admin/child/new/", data=dict(id=1, test="foo", name="bar"))
     assert rv.status_code == 302
 
-    rv = client.get('/admin/child/edit/?id=1')
+    rv = client.get("/admin/child/edit/?id=1")
     assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'foo' in data
-    assert 'bar' in data
+    data = rv.data.decode("utf-8")
+    assert "foo" in data
+    assert "bar" in data
 
 
-def test_single_table_inheritance():
+def test_concrete_table_inheritance(
+    app: Flask,
+    sqla_db_ext: T_ANY_SQLA_PROVIDER,
+    admin: Admin,
+    session_or_db: T_LITERAL_SESSION_OR_DB,
+) -> None:
     # Test multiple primary keys - mix int and string together
-    app, db, admin = setup()
+    with app.app_context():
 
-    CustomModel = declarative_base(Model, name='Model')
+        class Parent(sqla_db_ext.Base):  # type: ignore[misc, name-defined]
+            __tablename__ = "parent"
+            id = Column(Integer, primary_key=True)
+            test = Column(String)
 
-    class Parent(CustomModel):
-        __tablename__ = 'parent'
+        class Child(Parent):
+            __mapper_args__ = {"concrete": True}
+            name = Column(String(100))
 
-        id = db.Column(db.Integer, primary_key=True)
-        test = db.Column(db.String)
+        sqla_db_ext.create_all()
 
-        discriminator = db.Column('type', db.String(50))
-        __mapper_args__ = {'polymorphic_on': discriminator}
+        param = skip_or_return_session_or_db(sqla_db_ext, session_or_db)
+        view = CustomModelView(Child, param, form_columns=["id", "test", "name"])
+        admin.add_view(view)
 
-    class Child(Parent):
-        __mapper_args__ = {'polymorphic_identity': 'child'}
-        name = db.Column(db.String(100))
+        client = app.test_client()
 
-    CustomModel.metadata.create_all(db.engine)
+        rv = client.get("/admin/child/")
+        assert rv.status_code == 200
 
-    view = CustomModelView(Child, db.session, form_columns=['id', 'test', 'name'])
-    admin.add_view(view)
+        rv = client.post("/admin/child/new/", data=dict(id=1, test="foo", name="bar"))
+        assert rv.status_code == 302
 
-    client = app.test_client()
-
-    rv = client.get('/admin/child/')
-    assert rv.status_code == 200
-
-    rv = client.post('/admin/child/new/',
-                     data=dict(id=1, test='foo', name='bar'))
-    assert rv.status_code == 302
-
-    rv = client.get('/admin/child/edit/?id=1')
-    assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'foo' in data
-    assert 'bar' in data
+        rv = client.get("/admin/child/edit/?id=1")
+        assert rv.status_code == 200
+        data = rv.data.decode("utf-8")
+        assert "foo" in data
+        assert "bar" in data
 
 
-def test_concrete_table_inheritance():
+def test_concrete_multipk_inheritance(
+    app: Flask,
+    sqla_db_ext: T_ANY_SQLA_PROVIDER,
+    admin: Admin,
+    session_or_db: T_LITERAL_SESSION_OR_DB,
+) -> None:
     # Test multiple primary keys - mix int and string together
-    app, db, admin = setup()
+    with app.app_context():
 
-    class Parent(db.Model):
-        id = db.Column(db.Integer, primary_key=True)
-        test = db.Column(db.String)
+        class Parent(sqla_db_ext.Base):  # type: ignore[misc, name-defined]
+            __tablename__ = "parent"
+            id = Column(Integer, primary_key=True)
+            test = Column(String)
 
-    class Child(Parent):
-        __mapper_args__ = {'concrete': True}
-        id = db.Column(db.Integer, primary_key=True)
-        name = db.Column(db.String(100))
-        test = db.Column(db.String)
+        class Child(Parent):
+            __tablename__ = "child_concrete"
+            __mapper_args__ = {
+                "concrete": True,
+                # NOT involve the parent in queries for the child
+                "polymorphic_identity": "child",
+            }
+            id = Column(Integer, primary_key=True)
+            id2 = Column(Integer, primary_key=True)
+            test = Column(String)
+            name = Column(String(100))
 
-    db.create_all()
+        sqla_db_ext.create_all()
 
-    view = CustomModelView(Child, db.session, form_columns=['id', 'test', 'name'])
-    admin.add_view(view)
+        param = skip_or_return_session_or_db(sqla_db_ext, session_or_db)
+        view = CustomModelView(Child, param, form_columns=["id", "id2", "test", "name"])
+        admin.add_view(view)
 
-    client = app.test_client()
+        client = app.test_client()
 
-    rv = client.get('/admin/child/')
-    assert rv.status_code == 200
+        rv = client.get("/admin/child/")
+        assert rv.status_code == 200
 
-    rv = client.post('/admin/child/new/',
-                     data=dict(id=1, test='foo', name='bar'))
-    assert rv.status_code == 302
+        rv = client.post(
+            "/admin/child/new/", data=dict(id=1, id2=2, test="foo", name="bar")
+        )
+        assert rv.status_code == 302
 
-    rv = client.get('/admin/child/edit/?id=1')
-    assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'foo' in data
-    assert 'bar' in data
-
-
-def test_concrete_multipk_inheritance():
-    # Test multiple primary keys - mix int and string together
-    app, db, admin = setup()
-
-    class Parent(db.Model):
-        id = db.Column(db.Integer, primary_key=True)
-        test = db.Column(db.String)
-
-    class Child(Parent):
-        __mapper_args__ = {'concrete': True}
-        id = db.Column(db.Integer, primary_key=True)
-        id2 = db.Column(db.Integer, primary_key=True)
-        name = db.Column(db.String(100))
-        test = db.Column(db.String)
-
-    db.create_all()
-
-    view = CustomModelView(Child, db.session, form_columns=['id', 'id2', 'test', 'name'])
-    admin.add_view(view)
-
-    client = app.test_client()
-
-    rv = client.get('/admin/child/')
-    assert rv.status_code == 200
-
-    rv = client.post('/admin/child/new/',
-                     data=dict(id=1, id2=2, test='foo', name='bar'))
-    assert rv.status_code == 302
-
-    rv = client.get('/admin/child/edit/?id=1,2')
-    assert rv.status_code == 200
-    data = rv.data.decode('utf-8')
-    assert 'foo' in data
-    assert 'bar' in data
+        rv = client.get("/admin/child/edit/?id=1,2")
+        assert rv.status_code == 200
+        data = rv.data.decode("utf-8")
+        assert "foo" in data
+        assert "bar" in data

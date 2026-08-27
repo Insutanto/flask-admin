@@ -1,0 +1,13 @@
+[project]
+name = "example-datetime-timezone"
+version = "0.1.0"
+description = "Datetime Timezone Example."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "flask-admin[sqlalchemy-lite]",
+    "sqlalchemy>=2.0",
+]
+
+[tool.uv.sources]
+flask-admin = { path = "../../", editable = true }

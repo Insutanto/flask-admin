@@ -1,0 +1,8 @@
+{% extends 'admin/model/edit.html' %}
+
+{% block navlinks %}
+  {{ super() }}
+  <li class="nav-item">
+    <a class="nav-link text-info" href="{{ url_for('admin.index') }}">Return Home</a>
+  </li>
+{% endblock %}
